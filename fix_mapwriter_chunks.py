@@ -1,76 +1,103 @@
 import argparse
-import nbt
+import os
+from glob import glob
+from shutil import copyfile
+
+from nbt import nbt
+from nbt.region import RegionFile, RegionFileFormatError
 
 
-# TODO:
-# - read a directory of region files
-# - read every region file, copy chunks to new region file and make them readable
-# - write new 'result' region directory
+def fix_mapwriter_chunks(input_region_path: str, output_region_path: str):
+    input_region_path = os.path.abspath(input_region_path)
+    output_region_path = os.path.abspath(output_region_path)
 
-def fix_mapwriter_chunks(world_path, from_x, from_z, to_x, to_z):
-    if from_x >= to_x or from_z >= to_z:
-        raise Exception("Invalid range.")
+    if not os.path.isdir(input_region_path):
+        raise Exception(f"{input_region_path} is not a directory")
+    elif len(os.listdir(input_region_path)) == 0:
+        raise Exception(f"{input_region_path} is empty")
 
-    world = nbt.world.AnvilWorldFolder(world_path)
+    if os.path.exists(output_region_path):
+        if not os.path.isdir(output_region_path):
+            raise Exception(f"{output_region_path} is not a directory")
 
-    for x in range(from_x, to_x + 1):
-        for z in range(from_z, to_z + 1):
-            rx, cx = divmod(x, 32)
-            rz, cz = divmod(z, 32)
+        if len(os.listdir(output_region_path)) > 0:
+            raise Exception(f"{output_region_path} is not empty")
+    else:
+        os.mkdir(output_region_path)
 
-            if (rx, rz) not in world.regions and (rx, rz) not in world.regionfiles:
-                continue
+    input_mca_paths = glob(os.path.join(input_region_path, "*.mca"))
+    count = len(input_mca_paths)
 
-            region = world.get_region(rx, rz)
+    for i, input_mca_path in enumerate(input_mca_paths):
+        basename = os.path.basename(input_mca_path)
+        print(f"{basename} ({i+1}/{count})")
 
+        output_mca_path = os.path.join(output_region_path, basename)
+        if not os.path.exists(output_mca_path):
+            copyfile(input_mca_path, output_mca_path)
+
+        input_region = RegionFile(input_mca_path)
+        output_region = RegionFile(
+            os.path.join(output_region_path, os.path.basename(input_mca_path))
+        )
+
+        for m in input_region.get_metadata():
             try:
-                chunk = region.get_nbt(cx, cz)
-            except nbt.region.InconceivedChunk:
+                chunk = input_region.get_chunk(m.x, m.z)
+            except RegionFileFormatError:
                 continue
 
-            chunk['Level']['TerrainPopulated'] = nbt.nbt.TAG_Byte()
-            chunk['Level']['TerrainPopulated'].value = 1
+            chunk["Level"]["TerrainPopulated"] = nbt.TAG_Byte()
+            chunk["Level"]["TerrainPopulated"].value = 1
 
-            chunk['Level']['LightPopulated'] = nbt.nbt.TAG_Byte()
-            chunk['Level']['LightPopulated'].value = 0
+            chunk["Level"]["LightPopulated"] = nbt.TAG_Byte()
+            chunk["Level"]["LightPopulated"].value = 0
 
-            chunk['Level']['HeightMap'] = nbt.nbt.TAG_Int_Array()
-            chunk['Level']['HeightMap'].value = [0 for _ in range(256)]
+            chunk["Level"]["HeightMap"] = nbt.TAG_Int_Array()
+            chunk["Level"]["HeightMap"].value = [0 for _ in range(256)]
 
-            # chunk['Level']['Entities'] = nbt.nbt.TAG_List()
+            # chunk['Level']['Entities'] = nbt.TAG_List()
             # chunk['Level']['Entities'].value = []
 
-            # chunk['Level']['TileEntities'] = nbt.nbt.TAG_List()
+            # chunk['Level']['TileEntities'] = nbt.TAG_List()
             # chunk['Level']['TileEntities'].value = []
 
-            for section in chunk['Level']['Sections']:
-                if 'Blocks' not in section:
-                    section['Blocks'] = nbt.nbt.TAG_Byte_Array()
-                    section['Blocks'].value = bytearray(4096)
-                if 'Data' not in section:
-                    section['Data'] = nbt.nbt.TAG_Byte_Array()
-                    section['Data'].value = bytearray(2048)
-                if 'Add' not in section:
-                    section['Add'] = nbt.nbt.TAG_Byte_Array()
-                    section['Add'].value = bytearray(2048)
-                if 'BlockLight' not in section:
-                    section['BlockLight'] = nbt.nbt.TAG_Byte_Array()
-                    section['BlockLight'].value = bytearray(2048)
-                if 'SkyLight' not in section:
-                    section['SkyLight'] = nbt.nbt.TAG_Byte_Array()
-                    section['SkyLight'].value = bytearray(2048)
+            for section in chunk["Level"]["Sections"]:
+                if "Blocks" not in section:
+                    section["Blocks"] = nbt.TAG_Byte_Array()
+                    section["Blocks"].value = bytearray(4096)
+                if "Data" not in section:
+                    section["Data"] = nbt.TAG_Byte_Array()
+                    section["Data"].value = bytearray(2048)
+                if "Add" not in section:
+                    section["Add"] = nbt.TAG_Byte_Array()
+                    section["Add"].value = bytearray(2048)
+                if "BlockLight" not in section:
+                    section["BlockLight"] = nbt.TAG_Byte_Array()
+                    section["BlockLight"].value = bytearray(2048)
+                if "SkyLight" not in section:
+                    section["SkyLight"] = nbt.TAG_Byte_Array()
+                    section["SkyLight"].value = bytearray(2048)
 
-            region.write_chunk(cx, cz, chunk)
+            output_region.write_chunk(m.x, m.z, chunk)
+
+        input_region.close()
+        output_region.close()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("world_path", type=str, help="path to the world directory")
-    parser.add_argument("from_x", type=int, help="from X chunk coordinate")
-    parser.add_argument("from_z", type=int, help="from Z chunk coordinate")
-    parser.add_argument("to_x", type=int, help="to X chunk coordinate")
-    parser.add_argument("to_z", type=int, help="to Z chunk coordinate")
+    parser.add_argument(
+        "input_region_path",
+        type=str,
+        help="path to the region directory to use as input",
+    )
+    parser.add_argument(
+        "output_region_path",
+        type=str,
+        help="path to the region directory to write output to",
+    )
 
     args = parser.parse_args()
 
-    fix_mapwriter_chunks(args.world_path, args.from_x, args.from_z, args.to_x, args.to_z)
+    fix_mapwriter_chunks(args.input_region_path, args.output_region_path)
